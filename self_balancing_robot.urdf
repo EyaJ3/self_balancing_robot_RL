@@ -1,0 +1,222 @@
+<?xml version="1.0"?>
+<!--
+  Self-balancing 2-wheel robot, reconstructed from reference photos + measurements.
+
+  MEASURED / GIVEN (exact):
+    - Wheel radius                          : 0.033 m
+    - Track width (wheel center to center)  : 0.29 m
+    - Tier 1 height above wheel axle        : 0.035 m  (motors, 2x HW-039 drivers, BMS, 3xAA batteries)
+    - Tier 2 height above wheel axle        : 0.11 m   (Raspberry Pi 4 + 2 breadboard strips)
+    - Tier 3 height above wheel axle        : 0.16 m   (MPU6050, centered)
+    - Plate size                            : 0.23 m x 0.085 m
+    - Battery mass                          : 3 x 0.048 kg = 0.144 kg (exact)
+    - Total mass                            : 1.124 kg (exact)
+
+  STILL ESTIMATED (not measured, tune if you get better numbers):
+    - Wheel mass (50 g each)
+    - Split of the remaining ~980 g across tier1/tier2/tier3 hardware
+      (motors + drivers + BMS + bottom board vs. RPi4 + breadboards vs. MPU + top board)
+    - Plate thickness per tier
+-->
+<robot name="self_balancing_robot">
+
+  <material name="cardboard">
+    <color rgba="0.72 0.53 0.30 1.0"/>
+  </material>
+  <material name="black">
+    <color rgba="0.05 0.05 0.05 1.0"/>
+  </material>
+  <material name="blue_wheel">
+    <color rgba="0.10 0.35 0.85 1.0"/>
+  </material>
+  <material name="clear">
+    <color rgba="0.8 0.9 1.0 0.35"/>
+  </material>
+
+  <!-- ============ BASE / TIER 1 (motors, 2x HW-039 drivers, BMS, bottom plate) ============ -->
+  <!-- base_link's own frame origin = wheel axle height. Plate + hardware sit 3.5 cm above that. -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0.035" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.085 0.23 0.015"/>
+      </geometry>
+      <material name="cardboard"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.035" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.085 0.23 0.015"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0.035" rpy="0 0 0"/>
+      <mass value="0.46"/>
+      <inertia ixx="0.0020365" ixy="0" ixz="0" iyy="0.0002856" iyz="0" izz="0.0023048"/>
+    </inertial>
+  </link>
+
+  <!-- 3x AA battery pack (48g each, 144g total exact), mounted low in tier 1 -->
+  <link name="battery">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.05 0.045 0.014"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.05 0.045 0.014"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.144"/>
+      <inertia ixx="0.00002666" ixy="0" ixz="0" iyy="0.00003236" iyz="0" izz="0.00005430"/>
+    </inertial>
+  </link>
+  <joint name="battery_fix" type="fixed">
+    <parent link="base_link"/>
+    <child link="battery"/>
+    <origin xyz="0 0 0.025" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ============ WHEELS (JGB37-520 motor + wheel, driven) ============ -->
+  <link name="left_wheel">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.033" length="0.026"/>
+      </geometry>
+      <material name="blue_wheel"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.033" length="0.026"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="0.00001643" ixy="0" ixz="0" iyy="0.00001643" iyz="0" izz="0.00002723"/>
+    </inertial>
+  </link>
+
+  <link name="right_wheel">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.033" length="0.026"/>
+      </geometry>
+      <material name="blue_wheel"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.033" length="0.026"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="0.00001643" ixy="0" ixz="0" iyy="0.00001643" iyz="0" izz="0.00002723"/>
+    </inertial>
+  </link>
+
+  <joint name="left_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="left_wheel"/>
+    <origin xyz="0 0.145 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <dynamics damping="0.02" friction="0.01"/>
+  </joint>
+
+  <joint name="right_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="right_wheel"/>
+    <origin xyz="0 -0.145 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <dynamics damping="0.02" friction="0.01"/>
+  </joint>
+
+  <!-- ============ TIER 2 (Raspberry Pi 4 + 2x breadboard strips) ============ -->
+  <link name="middle_plate">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.085 0.23 0.005"/>
+      </geometry>
+      <material name="clear"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.085 0.23 0.005"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.30"/>
+      <inertia ixx="0.0013231" ixy="0" ixz="0" iyy="0.0001813" iyz="0" izz="0.0015031"/>
+    </inertial>
+  </link>
+
+  <joint name="middle_plate_fix" type="fixed">
+    <parent link="base_link"/>
+    <child link="middle_plate"/>
+    <origin xyz="0 0 0.11" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ============ TIER 3 (MPU6050 mount, top plate) ============ -->
+  <link name="top_plate">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.085 0.23 0.005"/>
+      </geometry>
+      <material name="cardboard"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.085 0.23 0.005"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.120"/>
+      <inertia ixx="0.0005293" ixy="0" ixz="0" iyy="0.0000725" iyz="0" izz="0.0006013"/>
+    </inertial>
+  </link>
+
+  <joint name="top_plate_fix" type="fixed">
+    <parent link="base_link"/>
+    <child link="top_plate"/>
+    <origin xyz="0 0 0.16" rpy="0 0 0"/>
+  </joint>
+
+  <!-- MPU6050 IMU, centered on top of tier 3 -->
+  <link name="mpu6050">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02 0.015 0.003"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.010"/>
+      <inertia ixx="0.0000004" ixy="0" ixz="0" iyy="0.0000004" iyz="0" izz="0.0000004"/>
+    </inertial>
+  </link>
+  <joint name="mpu6050_fix" type="fixed">
+    <parent link="top_plate"/>
+    <child link="mpu6050"/>
+    <origin xyz="0 0 0.004" rpy="0 0 0"/>
+  </joint>
+
+</robot>
