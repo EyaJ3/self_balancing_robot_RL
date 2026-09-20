@@ -5,6 +5,10 @@ pendulum control, same idea your real robot's MPU6050 + firmware would use).
 
 Run:
     python simulate_balance.py
+
+LEGACY: early prototype, not used by the RL pipeline. It reads euler[0]
+(roll) as pitch and uses velocity control; the environment in balance_env.py
+uses euler[1] (rotation about the wheel axle) and torque control.
 """
 
 import pybullet as p

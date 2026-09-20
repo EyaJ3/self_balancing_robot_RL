@@ -45,6 +45,16 @@ def main() -> None:
         action="store_true",
         help="View the separate full-observation baseline policy.",
     )
+    parser.add_argument(
+        "--output-suffix",
+        default="",
+        help="Load from the output folder with this suffix (e.g. _v2).",
+    )
+    parser.add_argument(
+        "--best",
+        action="store_true",
+        help="Use the best checkpoint saved during training (best/ subfolder).",
+    )
     args = parser.parse_args()
     if sum(
         [
@@ -86,8 +96,10 @@ def main() -> None:
         )
     else:
         output_name = "training_output"
-    output_dir = Path(__file__).with_name(output_name)
-    model_path = output_dir / "ppo_balance_robot"
+    output_dir = Path(__file__).with_name(output_name + args.output_suffix)
+    if args.best:
+        output_dir = output_dir / "best"
+    model_path = output_dir / ("best_model" if args.best else "ppo_balance_robot")
     raw_env = make_vec_env(
         lambda: TwoWheelBalanceEnv(
             render_mode="human",
@@ -112,7 +124,10 @@ def main() -> None:
                 else "full"
             ),
             randomize=(
-                args.hardware or args.hardware_accel
+                args.hardware
+                or args.hardware_accel
+                or args.hardware_stacked
+                or args.hardware_encoder
             )
             and not args.nominal,
             velocity_penalty=0.05,

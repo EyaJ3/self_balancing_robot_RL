@@ -24,8 +24,8 @@
 
 const unsigned long REPORT_INTERVAL_MS = 50;
 const float COUNTS_PER_REV = 3948.0f;
-const float LEFT_ENCODER_SIGN = 1.0f;
-const float RIGHT_ENCODER_SIGN = -1.0f;
+const float LEFT_ENCODER_SIGN = -1.0f;
+const float RIGHT_ENCODER_SIGN = 1.0f;
 const int8_t QUADRATURE_DELTA[16] = {
    0, -1,  1,  0,
    1,  0,  0, -1,

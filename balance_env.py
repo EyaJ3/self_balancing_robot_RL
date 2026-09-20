@@ -17,6 +17,12 @@ from gymnasium import spaces
 class TwoWheelBalanceEnv(gym.Env[np.ndarray, np.ndarray]):
     """Train the robot to remain upright using wheel torque control."""
 
+    # Fixed deadband used when randomize=False: midpoints of the measured
+    # ranges (left ~0-4 %, right ~6-11 % of the PWM range) so nominal
+    # evaluation is not easier than the real motors.
+    NOMINAL_LEFT_DEADBAND = 0.02
+    NOMINAL_RIGHT_DEADBAND = 0.085
+
     metadata = {"render_modes": ["human", "none"], "render_fps": 240}
 
     def __init__(
@@ -50,8 +56,7 @@ class TwoWheelBalanceEnv(gym.Env[np.ndarray, np.ndarray]):
         ):
             raise ValueError(
                 "observation_mode must be 'full', 'hardware', "
-                "'hardware_accel', or 'hardware_stacked'"
-                " or 'hardware_encoder'"
+                "'hardware_accel', 'hardware_stacked', or 'hardware_encoder'"
             )
         self.observation_mode = observation_mode
         self.max_steps = int(episode_seconds / (self.dt * frame_skip))
@@ -71,6 +76,9 @@ class TwoWheelBalanceEnv(gym.Env[np.ndarray, np.ndarray]):
         self.pitch_sensor_noise = 0.0
         self.gyro_sensor_noise = 0.0
         self.acceleration_sensor_noise = 0.0
+        self.encoder_noise = 0.0
+        self.encoder_delay_steps = 0
+        self.encoder_buffer: list[tuple[float, float]] = []
         self.initial_tilt_limit = math.radians(7.0 if randomize else 2.3)
         self.urdf_path = Path(__file__).with_name("self_balancing_robot.urdf")
 
@@ -200,6 +208,14 @@ class TwoWheelBalanceEnv(gym.Env[np.ndarray, np.ndarray]):
             yaw_rate += float(
                 self.np_random.normal(0.0, self.gyro_sensor_noise)
             )
+        if self.randomize and self.observation_mode == "hardware_encoder":
+            # The real ESP32 wheel speeds are noisy and arrive a little late.
+            self.encoder_buffer.append((left_speed, right_speed))
+            if len(self.encoder_buffer) > self.encoder_delay_steps + 1:
+                self.encoder_buffer.pop(0)
+            left_speed, right_speed = self.encoder_buffer[0]
+            left_speed += float(self.np_random.normal(0.0, self.encoder_noise))
+            right_speed += float(self.np_random.normal(0.0, self.encoder_noise))
         if self.observation_mode in (
             "hardware",
             "hardware_accel",
@@ -281,6 +297,7 @@ class TwoWheelBalanceEnv(gym.Env[np.ndarray, np.ndarray]):
         self.command_state = 0.0
         self.acceleration_state = 0.0
         self.hardware_observation_history = []
+        self.encoder_buffer = []
         self.previous_x_velocity = self._physical_state()[3]
         return self._state(), {}
 
@@ -289,14 +306,16 @@ class TwoWheelBalanceEnv(gym.Env[np.ndarray, np.ndarray]):
             self.torque_scale = 1.0
             self.left_torque_scale = 1.0
             self.right_torque_scale = 1.0
-            self.left_motor_deadband = 0.0
-            self.right_motor_deadband = 0.0
+            self.left_motor_deadband = self.NOMINAL_LEFT_DEADBAND
+            self.right_motor_deadband = self.NOMINAL_RIGHT_DEADBAND
             self.motor_delay_steps = 0
             self.pitch_sensor_bias = 0.0
             self.gyro_sensor_bias = 0.0
             self.pitch_sensor_noise = 0.0
             self.gyro_sensor_noise = 0.0
             self.acceleration_sensor_noise = 0.0
+            self.encoder_noise = 0.0
+            self.encoder_delay_steps = 0
             return
 
         self.torque_scale = float(self.np_random.uniform(0.9, 1.1))
@@ -311,6 +330,8 @@ class TwoWheelBalanceEnv(gym.Env[np.ndarray, np.ndarray]):
         self.pitch_sensor_noise = float(self.np_random.uniform(0.001, 0.003))
         self.gyro_sensor_noise = float(self.np_random.uniform(0.01, 0.03))
         self.acceleration_sensor_noise = float(self.np_random.uniform(0.01, 0.05))
+        self.encoder_noise = float(self.np_random.uniform(0.02, 0.15))  # rad/s
+        self.encoder_delay_steps = int(self.np_random.integers(0, 2))
         for link in range(-1, p.getNumJoints(self.robot_id, physicsClientId=self.client_id)):
             if link >= 0:
                 link_name = p.getJointInfo(

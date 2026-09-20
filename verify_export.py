@@ -44,6 +44,16 @@ def main() -> None:
     parser.add_argument("--encoder", action="store_true")
     parser.add_argument("--accel", action="store_true")
     parser.add_argument("--nominal", action="store_true")
+    parser.add_argument(
+        "--output-suffix",
+        default="",
+        help="Load from the output folder with this suffix (e.g. _v2).",
+    )
+    parser.add_argument(
+        "--best",
+        action="store_true",
+        help="Use the best checkpoint saved during training (best/ subfolder).",
+    )
     args = parser.parse_args()
 
     output_name = (
@@ -57,7 +67,9 @@ def main() -> None:
         if args.nominal
         else "training_output_hardware"
     )
-    output_dir = Path(__file__).with_name(output_name)
+    output_dir = Path(__file__).with_name(output_name + args.output_suffix)
+    source_dir = output_dir / "best" if args.best else output_dir
+    model_name = "best_model" if args.best else "ppo_balance_robot"
 
     # --- Load the real SB3 model + VecNormalize, exactly like export does ---
     raw_env = make_vec_env(
@@ -72,9 +84,9 @@ def main() -> None:
         ),
         n_envs=1,
     )
-    stats = VecNormalize.load(str(output_dir / "vecnormalize.pkl"), raw_env)
+    stats = VecNormalize.load(str(source_dir / "vecnormalize.pkl"), raw_env)
     stats.training = False
-    model = PPO.load(str(output_dir / "ppo_balance_robot"), env=stats)
+    model = PPO.load(str(source_dir / model_name), env=stats)
 
     # --- Load the exported NumPy reconstruction ---
     layers, obs_mean, obs_var = load_npz_policy(output_dir / "hardware_policy.npz")

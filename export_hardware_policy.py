@@ -30,6 +30,16 @@ def main() -> None:
         action="store_true",
         help="Export the wheel-speed hardware policy.",
     )
+    parser.add_argument(
+        "--output-suffix",
+        default="",
+        help="Load from the output folder with this suffix (e.g. _v2).",
+    )
+    parser.add_argument(
+        "--best",
+        action="store_true",
+        help="Use the best checkpoint saved during training (best/ subfolder).",
+    )
     args = parser.parse_args()
     if args.accel and args.encoder:
         parser.error("--accel and --encoder cannot be combined")
@@ -45,7 +55,9 @@ def main() -> None:
         if args.nominal
         else "training_output_hardware"
     )
-    output_dir = Path(__file__).with_name(output_name)
+    output_dir = Path(__file__).with_name(output_name + args.output_suffix)
+    source_dir = output_dir / "best" if args.best else output_dir
+    model_name = "best_model" if args.best else "ppo_balance_robot"
     raw_env = make_vec_env(
         lambda: TwoWheelBalanceEnv(
             randomize=not args.nominal,
@@ -61,10 +73,10 @@ def main() -> None:
         n_envs=1,
     )
     stats = VecNormalize.load(
-        str(output_dir / "vecnormalize.pkl"),
+        str(source_dir / "vecnormalize.pkl"),
         raw_env,
     )
-    model = PPO.load(str(output_dir / "ppo_balance_robot"), env=stats)
+    model = PPO.load(str(source_dir / model_name), env=stats)
     policy = model.policy
     weights: dict[str, np.ndarray] = {}
     layer_number = 0

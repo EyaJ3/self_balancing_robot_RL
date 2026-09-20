@@ -7,6 +7,8 @@ have been checked with the wheels lifted and an emergency power disconnect ready
 from __future__ import annotations
 
 import argparse
+import csv
+import datetime
 import math
 import time
 from pathlib import Path
@@ -34,6 +36,20 @@ TARGET_ANGLE_DEG = 1.6
 SAFETY_LIMIT_DEG = 25.0
 GYRO_LSB_PER_DEG_S = 131.0
 CONTROL_FREQUENCY_HZ = 120.0
+LOG_COLUMNS = [
+    "t_s",
+    "dt_s",
+    "angle_deg",
+    "error_deg",
+    "gyro_deg_s",
+    "left_rad_s",
+    "right_rad_s",
+    "action_left",
+    "action_right",
+    "pwm_left_pct",
+    "pwm_right_pct",
+    "accel_angle_deg",
+]
 
 
 def read_word(bus: smbus2.SMBus, register: int) -> int:
@@ -44,11 +60,14 @@ def read_word(bus: smbus2.SMBus, register: int) -> int:
 
 
 def read_imu(
-    bus: smbus2.SMBus, gyro_bias: float, yaw_gyro_bias: float
+    bus: smbus2.SMBus,
+    gyro_bias: float,
+    yaw_gyro_bias: float,
+    gyro_sign: float = 1.0,
 ) -> tuple[float, float, float, float]:
     ax = read_word(bus, 0x3B) / 16384.0
     az = read_word(bus, 0x3F) / 16384.0
-    gyro_deg_s = read_word(bus, 0x45) / GYRO_LSB_PER_DEG_S - gyro_bias
+    gyro_deg_s = gyro_sign * (read_word(bus, 0x45) / GYRO_LSB_PER_DEG_S - gyro_bias)
     yaw_gyro_deg_s = read_word(bus, 0x47) / GYRO_LSB_PER_DEG_S - yaw_gyro_bias
     angle_deg = math.degrees(math.atan2(ax, az))
     forward_acceleration = (ax * 9.81) - (9.81 * math.sin(math.radians(angle_deg)))
@@ -126,6 +145,18 @@ def main() -> None:
     parser.add_argument("--max-pwm", type=float, default=20.0)
     parser.add_argument("--seconds", type=float, default=30.0)
     parser.add_argument("--policy", type=Path, default=None)
+    parser.add_argument(
+        "--log",
+        type=Path,
+        default=None,
+        help="CSV file for the per-step log (default: logs/deploy_<timestamp>.csv).",
+    )
+    parser.add_argument("--no-log", action="store_true", help="Do not write a CSV log.")
+    parser.add_argument(
+        "--invert-gyro",
+        action="store_true",
+        help="Negate the pitch gyro so it equals d(angle)/dt (sim convention).",
+    )
     args = parser.parse_args()
     if args.accel and args.encoder:
         parser.error("--accel and --encoder cannot be combined")
@@ -177,23 +208,27 @@ def main() -> None:
             time.sleep(0.005)
         gyro_bias = float(np.mean(gyro_samples))
         yaw_gyro_bias = float(np.mean(yaw_gyro_samples))
-        angle, _, _, _ = read_imu(bus, gyro_bias, yaw_gyro_bias)
+        gyro_sign = -1.0 if args.invert_gyro else 1.0
+        angle, _, _, _ = read_imu(bus, gyro_bias, yaw_gyro_bias, gyro_sign)
         filtered_angle = angle
         filtered_acceleration = 0.0
         left_speed = 0.0
         right_speed = 0.0
         encoder_buffer = b""
         command_state = 0.0
+        log_rows: list[list[float]] = []
         start = time.perf_counter()
         last = start
         print(f"Gyro bias: {gyro_bias:.3f} deg/s; initial angle: {angle:.2f} deg")
         print("Sensor-only mode." if not args.arm else f"ARMED, max PWM={args.max_pwm:.1f}%")
+        if args.invert_gyro:
+            print("Pitch gyro inverted.")
         while time.perf_counter() - start < args.seconds:
             now = time.perf_counter()
             dt = max(now - last, 1e-4)
             last = now
             angle, gyro, yaw_gyro, forward_acceleration = read_imu(
-                bus, gyro_bias, yaw_gyro_bias
+                bus, gyro_bias, yaw_gyro_bias, gyro_sign
             )
             filtered_angle = 0.98 * (filtered_angle + gyro * dt) + 0.02 * angle
             filtered_acceleration = (
@@ -241,10 +276,33 @@ def main() -> None:
             action = policy_action(layers, observation, obs_mean, obs_var)
             if args.arm:
                 set_motors(pwms, action, args.max_pwm)
+            # PWM percent actually sent to each wheel (0 when not armed).
+            left_pwm, right_pwm = (
+                np.clip(action * args.max_pwm, -args.max_pwm, args.max_pwm)
+                if args.arm
+                else (0.0, 0.0)
+            )
+            log_rows.append(
+                [
+                    now - start,
+                    dt,
+                    filtered_angle,
+                    error_deg,
+                    gyro,
+                    left_speed,
+                    right_speed,
+                    float(action[0]),
+                    float(action[1]),
+                    float(left_pwm),
+                    float(right_pwm),
+                    angle,
+                ]
+            )
             command_state = 0.9 * command_state + 0.1 * float(np.mean(action))
             print(
                 f"\rangle={filtered_angle:6.2f} deg gyro={gyro:7.2f} "
-                f"action=({action[0]:+.3f},{action[1]:+.3f})",
+                f"action=({action[0]:+.3f},{action[1]:+.3f}) "
+                f"pwm=({left_pwm:+5.1f},{right_pwm:+5.1f})%",
                 end="",
                 flush=True,
             )
@@ -263,6 +321,19 @@ def main() -> None:
         if encoder_device is not None:
             encoder_device.close()
         print("\nMotors stopped.")
+        if log_rows and not args.no_log:
+            try:
+                log_path = args.log or Path(__file__).with_name("logs") / (
+                    datetime.datetime.now().strftime("deploy_%Y%m%d_%H%M%S.csv")
+                )
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(log_path, "w", newline="") as log_file:
+                    writer = csv.writer(log_file)
+                    writer.writerow(LOG_COLUMNS)
+                    writer.writerows(log_rows)
+                print(f"Log saved: {log_path} ({len(log_rows)} rows)")
+            except OSError as exc:
+                print(f"Could not write log: {exc}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,4 @@
+pyserial
+smbus2
+RPi.GPIO
+numpy>=1.26,<3

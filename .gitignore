@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+
+# TensorBoard logs (trained models in training_output*/ stay tracked as a backup)
+tensorboard/
+
+# Hardware run logs written by deploy_pi_hardware.py
+logs/

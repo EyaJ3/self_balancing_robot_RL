@@ -11,11 +11,24 @@ import argparse
 from pathlib import Path
 
 from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import VecNormalize
 
 from balance_env import TwoWheelBalanceEnv
+
+
+class SaveNormalizationOnBest(BaseCallback):
+    """Save VecNormalize stats next to the best model whenever it improves."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__()
+        self.path = path
+
+    def _on_step(self) -> bool:
+        self.model.get_vec_normalize_env().save(str(self.path))
+        return True
 
 
 def main() -> None:
@@ -52,6 +65,30 @@ def main() -> None:
         "--no-randomization",
         action="store_true",
         help="Disable domain randomization for a nominal hardware learning test.",
+    )
+    parser.add_argument(
+        "--output-suffix",
+        default="",
+        help="Append to the output folder name (e.g. _v2) so existing models are kept.",
+    )
+    parser.add_argument(
+        "--episode-seconds",
+        type=float,
+        default=10.0,
+        help="Training episode length; longer episodes cover behaviour past 10 s.",
+    )
+    parser.add_argument("--velocity-penalty", type=float, default=0.05)
+    parser.add_argument("--position-penalty", type=float, default=0.02)
+    parser.add_argument(
+        "--lr-decay",
+        action="store_true",
+        help="Decay the learning rate linearly to zero over training.",
+    )
+    parser.add_argument(
+        "--eval-freq",
+        type=int,
+        default=50_000,
+        help="Total timesteps between evaluations that pick the best checkpoint (0 = off).",
     )
     args = parser.parse_args()
     modes = sum(
@@ -99,6 +136,8 @@ def main() -> None:
                 frame_skip=2 if hardware_mode else 4,
                 observation_mode=observation_mode,
                 randomize=hardware_mode and not args.no_randomization,
+                velocity_penalty=args.velocity_penalty,
+                position_penalty=args.position_penalty,
             )
         )
         return
@@ -123,25 +162,27 @@ def main() -> None:
         output_name = "training_output_full_baseline"
     else:
         output_name = "training_output"
-    output_dir = Path(__file__).with_name(output_name)
+    output_dir = Path(__file__).with_name(output_name + args.output_suffix)
     output_dir.mkdir(exist_ok=True)
-    env = make_vec_env(
-        lambda: TwoWheelBalanceEnv(
+
+    def make_env() -> TwoWheelBalanceEnv:
+        return TwoWheelBalanceEnv(
             randomize=not args.no_randomization if hardware_mode else True,
             frame_skip=2 if hardware_mode else 4,
             observation_mode=observation_mode,
-            velocity_penalty=0.05,
-            position_penalty=0.02,
-        ),
-        n_envs=args.envs,
-    )
+            episode_seconds=args.episode_seconds,
+            velocity_penalty=args.velocity_penalty,
+            position_penalty=args.position_penalty,
+        )
+
+    env = make_vec_env(make_env, n_envs=args.envs)
     env = VecNormalize(env, norm_obs=True, norm_reward=True, clip_obs=10.0)
     model = PPO(
         "MlpPolicy",
         env,
         policy_kwargs={"net_arch": [64, 64]},
         verbose=1,
-        learning_rate=3e-4,
+        learning_rate=(lambda progress: 3e-4 * progress) if args.lr_decay else 3e-4,
         n_steps=2048,
         batch_size=256,
         gamma=0.99,
@@ -149,12 +190,35 @@ def main() -> None:
         ent_coef=0.0,
         tensorboard_log=str(output_dir / "tensorboard"),
     )
+    callback = None
+    eval_env = None
+    if args.eval_freq > 0:
+        # Same randomization as training; stats are synced from the train env.
+        eval_env = VecNormalize(
+            make_vec_env(make_env, n_envs=1),
+            training=False,
+            norm_obs=True,
+            norm_reward=False,
+            clip_obs=10.0,
+        )
+        best_dir = output_dir / "best"
+        best_dir.mkdir(exist_ok=True)
+        callback = EvalCallback(
+            eval_env,
+            best_model_save_path=str(best_dir),
+            callback_on_new_best=SaveNormalizationOnBest(best_dir / "vecnormalize.pkl"),
+            eval_freq=max(args.eval_freq // args.envs, 1),
+            n_eval_episodes=10,
+            deterministic=True,
+        )
     try:
-        model.learn(total_timesteps=args.timesteps)
+        model.learn(total_timesteps=args.timesteps, callback=callback)
         model.save(str(output_dir / "ppo_balance_robot"))
         env.save(str(output_dir / "vecnormalize.pkl"))
     finally:
         env.close()
+        if eval_env is not None:
+            eval_env.close()
 
 
 if __name__ == "__main__":
